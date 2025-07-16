@@ -1,0 +1,5 @@
+Flask
+yt-dlp
+boto3
+ffmpeg-python
+gunicorn
