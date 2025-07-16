@@ -1,18 +1,22 @@
 from flask import Flask, request, jsonify
-import yt_dlp, boto3, subprocess, os
+import yt_dlp
+import subprocess
+import boto3
+import os
 from botocore.client import Config
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Allow all origins (frontend access)
+CORS(app)
 
-# Cloudflare R2 config
+# 👉 Cloudflare R2 Configuration
 R2_ENDPOINT_URL = "https://d541eba02ae37eba4719d0d4aa61287c.r2.cloudflarestorage.com/siam"
 R2_ACCESS_KEY = "e392355ef4c84c70a3b6cb7751efb6c7"
 R2_SECRET_KEY = "f6bbd8f4506f7aefb64a26bf467d17227dd16021af3beae91570f48b1a65d99b"
 R2_BUCKET_NAME = "siam"
 R2_PUBLIC_URL = "https://pub-d8f5af7f053343ed8295b16a145f6c1c.r2.dev/siam"
 
+# 👉 R2 Client
 r2_client = boto3.client(
     's3',
     endpoint_url=R2_ENDPOINT_URL,
@@ -21,6 +25,7 @@ r2_client = boto3.client(
     config=Config(signature_version='s3v4')
 )
 
+# 👉 Download YouTube video (max 480p)
 def download_video(url, output_path="video.mp4"):
     ydl_opts = {
         'format': 'bv*[ext=mp4][height<=480]+ba[ext=m4a]/b[ext=mp4][height<=480]/best',
@@ -29,6 +34,7 @@ def download_video(url, output_path="video.mp4"):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
+# 👉 Convert to .3GP
 def convert_to_3gp(input_file, output_file="video.3gp"):
     vf = "scale=480:-2:force_original_aspect_ratio=decrease,pad=480:360:(ow-iw)/2:(oh-ih)/2"
     subprocess.run([
@@ -39,18 +45,30 @@ def convert_to_3gp(input_file, output_file="video.3gp"):
         "-y", output_file
     ])
 
+# 👉 Upload to R2
 def upload_to_r2(file_path, file_name):
     r2_client.upload_file(Filename=file_path, Bucket=R2_BUCKET_NAME, Key=file_name)
     return f"{R2_PUBLIC_URL}/{file_name}"
 
-@app.route("/convert", methods=["POST"])
+@app.route("/")
+def home():
+    return "🟢 YouTube to 3GP backend is live ✅"
+
+# 👉 Supports both GET and POST for /convert
+@app.route("/convert", methods=["GET", "POST"])
 def convert():
     try:
-        data = request.json
-        url = data.get("url")
-        if not url:
-            return jsonify({"status": "error", "message": "URL missing"}), 400
+        # Accept both GET param & POST body
+        if request.method == "POST":
+            data = request.json
+            url = data.get("url")
+        else:
+            url = request.args.get("url")
 
+        if not url:
+            return jsonify({"status": "error", "message": "No URL provided"}), 400
+
+        # Process
         download_video(url, "video.mp4")
         convert_to_3gp("video.mp4", "video.3gp")
         file_url = upload_to_r2("video.3gp", "video.3gp")
@@ -59,9 +77,6 @@ def convert():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-@app.route("/", methods=["GET"])
-def home():
-    return "YouTube to 3GP backend is live ✅"
-
+# Run server
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
